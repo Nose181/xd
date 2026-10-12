@@ -1,0 +1,33 @@
+RULETA DE RETOS - Mod de Minecraft (Forge 1.20.1)
+=================================================
+
+CÓMO SE USA
+- Entra al mundo y pulsa la tecla R (se cambia en Opciones > Controles > Ruleta de Retos).
+- Pulsa "Girar" (o la barra espaciadora). Al detenerse, el reto sale en pantalla y en el chat.
+- Tus retos se editan en: .minecraft/config/ruleta-retos.txt (un reto por línea, 2 a 24).
+  Guarda el archivo y vuelve a abrir la ruleta; no hace falta reiniciar el juego.
+
+INSTALAR (ya compilado)
+1. Instala Minecraft Forge 1.20.1 (47.x).
+2. Copia ruleta-1.0.0.jar en la carpeta mods (Windows: Win+R, escribe %appdata%\.minecraft\mods).
+3. Abre Minecraft con el perfil de Forge.
+El mod es solo de cliente: funciona también en servidores que no lo tengan.
+
+COMPILAR EL .JAR
+1. Instala Java JDK 17.
+2. Descarga el "MDK" de Forge 1.20.1 desde files.minecraftforge.net y copia a esta carpeta
+   estos tres elementos: gradlew, gradlew.bat y la carpeta gradle.
+3. Abre una terminal en esta carpeta y ejecuta:
+      Windows:   gradlew.bat build
+      Mac/Linux: ./gradlew build
+4. El archivo queda en build/libs/ruleta-1.0.0.jar
+
+COMPILAR CON GITHUB (sin instalar nada)
+1. Crea una cuenta gratis en github.com y un repositorio nuevo (botón "New").
+2. En el repositorio: Add file > Upload files. Arrastra TODO el contenido de esta carpeta
+   (incluida la carpeta oculta .github) y pulsa "Commit changes".
+   Si no ves la carpeta .github al arrastrar: Add file > Create new file, escribe como nombre
+   .github/workflows/build.yml y pega dentro el contenido de ese archivo.
+3. Abre la pestaña "Actions": verás "Compilar mod" ejecutándose (tarda unos 5 minutos).
+4. Cuando termine con el check verde, entra a esa ejecución y baja a "Artifacts":
+   descarga "ruleta-mod". Dentro está ruleta-1.0.0.jar.

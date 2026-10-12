@@ -1,6 +1,4 @@
 {
-  "gui.ruleta.girar": "Girar",
   "gui.ruleta.cerrar": "Cerrar",
-  "gui.ruleta.resultado": "¡Te tocó!",
-  "gui.ruleta.pista": "Pulsa Girar o la barra espaciadora"
+  "gui.ruleta.resultado": "¡Les tocó!"
 }

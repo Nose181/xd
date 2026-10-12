@@ -1,6 +1,4 @@
 {
-  "gui.ruleta.girar": "Spin",
   "gui.ruleta.cerrar": "Close",
-  "gui.ruleta.resultado": "You got:",
-  "gui.ruleta.pista": "Press Spin or the space bar"
+  "gui.ruleta.resultado": "You got:"
 }

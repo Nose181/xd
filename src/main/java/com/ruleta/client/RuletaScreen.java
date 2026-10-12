@@ -6,6 +6,8 @@ import com.mojang.blaze3d.vertex.DefaultVertexFormat;
 import com.mojang.blaze3d.vertex.Tesselator;
 import com.mojang.blaze3d.vertex.VertexFormat;
 import com.mojang.math.Axis;
+import com.ruleta.net.AnunciarRetoPacket;
+import com.ruleta.net.Net;
 import net.minecraft.Util;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
@@ -34,12 +36,20 @@ public class RuletaScreen extends Screen {
     private float velocidad = 0f;
     private boolean girando = false;
     private int ganador = -1;
+    private int ultimoIdx = -1;
     private String resultado = null;
     private long ultimo = Util.getMillis();
     private Button botonGirar;
+    private final boolean girarAlAbrir;
+    private boolean iniciado = false;
 
     public RuletaScreen() {
+        this(false);
+    }
+
+    public RuletaScreen(boolean girarAlAbrir) {
         super(Component.literal("Ruleta"));
+        this.girarAlAbrir = girarAlAbrir;
     }
 
     @Override
@@ -50,6 +60,10 @@ public class RuletaScreen extends Screen {
         addRenderableWidget(Button.builder(Component.translatable("gui.ruleta.cerrar"), b -> onClose())
                 .bounds(this.width / 2 + 4, this.height - 28, ancho, 20).build());
         botonGirar.active = !girando;
+        if (girarAlAbrir && !iniciado) {
+            iniciado = true;
+            girar();
+        }
     }
 
     private void girar() {
@@ -59,21 +73,36 @@ public class RuletaScreen extends Screen {
         ganador = -1;
         resultado = null;
         if (botonGirar != null) botonGirar.active = false;
+        ultimoIdx = indiceBajoFlecha();
     }
 
-    private void terminar() {
+    /** Indice del sector que esta justo bajo la flecha. */
+    private int indiceBajoFlecha() {
         int n = retos.size();
         float seg = DOS_PI / n;
         float rel = (float) ((((-Math.PI / 2.0 - angulo) % DOS_PI) + DOS_PI) % DOS_PI);
-        ganador = Math.min(n - 1, (int) (rel / seg));
+        return Math.min(n - 1, (int) (rel / seg));
+    }
+
+    private void terminar() {
+        ganador = indiceBajoFlecha();
         resultado = retos.get(ganador);
         if (botonGirar != null) botonGirar.active = true;
 
         Minecraft mc = Minecraft.getInstance();
-        if (mc.player != null) {
-            mc.player.displayClientMessage(Component.literal("§6[Ruleta] §f" + resultado), false);
+        boolean enviado = false;
+        // Si el servidor tiene el mod, el reto se anuncia a todos los jugadores.
+        if (mc.getConnection() != null && Net.CHANNEL.isRemotePresent(mc.getConnection().getConnection())) {
+            Net.CHANNEL.sendToServer(new AnunciarRetoPacket(resultado));
+            enviado = true;
         }
-        mc.getSoundManager().play(SimpleSoundInstance.forUI(SoundEvents.PLAYER_LEVELUP, 1.0f));
+        // Si no, se muestra solo para ti.
+        if (!enviado) {
+            if (mc.player != null) {
+                mc.player.displayClientMessage(Component.literal("§6[Ruleta] §f" + resultado), false);
+            }
+            mc.getSoundManager().play(SimpleSoundInstance.forUI(SoundEvents.UI_TOAST_CHALLENGE_COMPLETE, 1.0f));
+        }
     }
 
     @Override
@@ -86,6 +115,12 @@ public class RuletaScreen extends Screen {
         if (girando) {
             angulo += velocidad * dt;
             velocidad *= (float) Math.exp(-0.8 * dt);
+            int idx = indiceBajoFlecha();
+            if (idx != ultimoIdx) {
+                ultimoIdx = idx;
+                float tono = 0.8f + Math.min(velocidad / 20f, 1f) * 0.8f;
+                Minecraft.getInstance().getSoundManager().play(SimpleSoundInstance.forUI(SoundEvents.UI_BUTTON_CLICK, tono));
+            }
             if (velocidad < 0.04f) {
                 velocidad = 0f;
                 girando = false;

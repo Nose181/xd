@@ -5,38 +5,44 @@ import net.minecraftforge.api.distmarker.Dist;
 import net.minecraftforge.fml.DistExecutor;
 import net.minecraftforge.network.NetworkEvent;
 
-import java.util.ArrayList;
-import java.util.List;
 import java.util.function.Supplier;
 
-/** Servidor -> clientes: "abre la ruleta con esta lista y que caiga en este sector". */
+/**
+ * Servidor -> clientes: "gira la ruleta con estos colores y que caiga en este sector".
+ * Solo se manda el texto del reto ganador, asi nadie puede ver los demas.
+ */
 public class GirarPacket {
 
-    private final List<String> retos;
+    private final int[] colores;
     private final int indice;
+    private final String texto;
 
-    public GirarPacket(List<String> retos, int indice) {
-        this.retos = retos;
+    public GirarPacket(int[] colores, int indice, String texto) {
+        this.colores = colores;
         this.indice = indice;
+        this.texto = texto;
     }
 
     public static void encode(GirarPacket p, FriendlyByteBuf buf) {
-        buf.writeVarInt(p.retos.size());
-        for (String s : p.retos) buf.writeUtf(s, 256);
+        buf.writeVarInt(p.colores.length);
+        for (int c : p.colores) buf.writeInt(c);
         buf.writeVarInt(p.indice);
+        buf.writeUtf(p.texto, 256);
     }
 
     public static GirarPacket decode(FriendlyByteBuf buf) {
         int n = buf.readVarInt();
-        List<String> retos = new ArrayList<>();
-        for (int i = 0; i < n; i++) retos.add(buf.readUtf(256));
-        return new GirarPacket(retos, buf.readVarInt());
+        int[] colores = new int[n];
+        for (int i = 0; i < n; i++) colores[i] = buf.readInt();
+        int indice = buf.readVarInt();
+        String texto = buf.readUtf(256);
+        return new GirarPacket(colores, indice, texto);
     }
 
     public static void handle(GirarPacket p, Supplier<NetworkEvent.Context> ctx) {
         NetworkEvent.Context c = ctx.get();
         c.enqueueWork(() -> DistExecutor.unsafeRunWhenOn(Dist.CLIENT,
-                () -> () -> com.ruleta.client.ClientHooks.abrirRuleta(p.retos, p.indice)));
+                () -> () -> com.ruleta.client.ClientHooks.abrirRuleta(p.colores, p.indice, p.texto)));
         c.setPacketHandled(true);
     }
 }

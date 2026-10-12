@@ -21,9 +21,10 @@ public class Net {
 
     public static void registrar() {
         CHANNEL.registerMessage(0, GirarPacket.class,
-                GirarPacket::encode,
-                GirarPacket::decode,
-                GirarPacket::handle,
+                GirarPacket::encode, GirarPacket::decode, GirarPacket::handle,
+                Optional.of(NetworkDirection.PLAY_TO_CLIENT));
+        CHANNEL.registerMessage(1, MuertePacket.class,
+                MuertePacket::encode, MuertePacket::decode, MuertePacket::handle,
                 Optional.of(NetworkDirection.PLAY_TO_CLIENT));
     }
 }

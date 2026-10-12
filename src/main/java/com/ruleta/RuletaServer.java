@@ -2,13 +2,17 @@ package com.ruleta;
 
 import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.arguments.IntegerArgumentType;
+import com.mojang.brigadier.arguments.StringArgumentType;
 import com.ruleta.client.RetosConfig;
 import com.ruleta.net.GirarPacket;
+import com.ruleta.net.MuertePacket;
 import com.ruleta.net.Net;
 import net.minecraft.ChatFormatting;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
+import net.minecraft.commands.SharedSuggestionProvider;
 import net.minecraft.network.chat.Component;
+import net.minecraft.network.chat.Style;
 import net.minecraft.network.protocol.game.ClientboundSetSubtitleTextPacket;
 import net.minecraft.network.protocol.game.ClientboundSetTitleTextPacket;
 import net.minecraft.network.protocol.game.ClientboundSetTitlesAnimationPacket;
@@ -24,23 +28,28 @@ import net.minecraftforge.fml.common.Mod;
 import net.minecraftforge.network.PacketDistributor;
 import net.minecraftforge.server.ServerLifecycleHooks;
 
+import java.io.IOException;
+import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Random;
 import java.util.Set;
 import java.util.UUID;
 
 /**
- * /ruleta [segundos]  -> la ruleta gira en la pantalla de TODOS y sale un reto.
- * /cumplido           -> cada jugador avisa que cumplio el reto.
+ * /ruleta [segundos]            -> gira la ruleta en la pantalla de TODOS y sale un reto.
+ * /cumplido                     -> cada jugador avisa que cumplio el reto.
+ * /ruleta agregar <color> <reto>, /ruleta quitar <n>, /ruleta lista  -> editar los retos (operadores).
  * Quien no escriba /cumplido antes de que se acabe el tiempo muere al instante.
  */
 @Mod.EventBusSubscriber(modid = RuletaMod.MODID, bus = Mod.EventBusSubscriber.Bus.FORGE)
 public class RuletaServer {
 
-    private enum Fase { NINGUNA, GIRANDO, ACTIVO }
+    private enum Fase { NINGUNA, GIRANDO, ACTIVO, EJECUCION }
 
-    private static final int TICKS_GIRO = 150; // 7,5 s: lo que dura la animacion
+    private static final int TICKS_GIRO = 180;      // 9 s: animacion de la ruleta + resultado
+    private static final int TICKS_EJECUCION = 55;  // ~2,7 s: animacion de la calavera antes de morir
 
     private static Fase fase = Fase.NINGUNA;
     private static int ticks = 0;
@@ -48,6 +57,7 @@ public class RuletaServer {
     private static String reto = "";
     private static final Set<UUID> participantes = new HashSet<>();
     private static final Set<UUID> cumplidos = new HashSet<>();
+    private static final Set<UUID> condenados = new HashSet<>();
 
     // ------------------------------------------------------------ comandos
     @SubscribeEvent
@@ -60,14 +70,30 @@ public class RuletaServer {
                         .executes(ctx -> iniciar(ctx.getSource(),
                                 IntegerArgumentType.getInteger(ctx, "segundos"))))
                 .then(Commands.literal("cancelar")
-                        .requires(RuletaServer::puedeCancelar)
-                        .executes(ctx -> cancelar(ctx.getSource()))));
+                        .requires(RuletaServer::puedeAdministrar)
+                        .executes(ctx -> cancelar(ctx.getSource())))
+                .then(Commands.literal("lista")
+                        .requires(RuletaServer::puedeAdministrar)
+                        .executes(ctx -> lista(ctx.getSource())))
+                .then(Commands.literal("quitar")
+                        .requires(RuletaServer::puedeAdministrar)
+                        .then(Commands.argument("numero", IntegerArgumentType.integer(1, RetosConfig.MAXIMO))
+                                .executes(ctx -> quitar(ctx.getSource(),
+                                        IntegerArgumentType.getInteger(ctx, "numero")))))
+                .then(Commands.literal("agregar")
+                        .requires(RuletaServer::puedeAdministrar)
+                        .then(Commands.argument("color", StringArgumentType.word())
+                                .suggests((ctx, b) -> SharedSuggestionProvider.suggest(Colores.nombres(), b))
+                                .then(Commands.argument("condicion", StringArgumentType.greedyString())
+                                        .executes(ctx -> agregar(ctx.getSource(),
+                                                StringArgumentType.getString(ctx, "color"),
+                                                StringArgumentType.getString(ctx, "condicion")))))));
 
         d.register(Commands.literal("cumplido")
                 .executes(ctx -> cumplido(ctx.getSource())));
     }
 
-    private static boolean puedeCancelar(CommandSourceStack src) {
+    private static boolean puedeAdministrar(CommandSourceStack src) {
         if (src.hasPermission(2)) return true;
         return src.getEntity() instanceof ServerPlayer sp
                 && src.getServer().isSingleplayerOwner(sp.getGameProfile());
@@ -78,17 +104,22 @@ public class RuletaServer {
             src.sendFailure(Component.literal("Ya hay una ruleta en marcha."));
             return 0;
         }
-        List<String> retos = RetosConfig.cargar();
-        int indice = new Random().nextInt(retos.size());
-        reto = retos.get(indice);
+        List<Reto> retos = RetosConfig.cargar();
+        int n = retos.size();
+        int[] colores = new int[n];
+        for (int i = 0; i < n; i++) colores[i] = retos.get(i).rgb(i, n);
+        int indice = new Random().nextInt(n);
+        reto = retos.get(indice).texto();
+
         segundosLimite = segundos;
         fase = Fase.GIRANDO;
         ticks = TICKS_GIRO;
         participantes.clear();
         cumplidos.clear();
+        condenados.clear();
 
-        // El servidor elige el resultado y todos los clientes ven el mismo.
-        Net.CHANNEL.send(PacketDistributor.ALL.noArg(), new GirarPacket(retos, indice));
+        // El servidor elige el resultado, todos ven el mismo y solo se envia el reto ganador.
+        Net.CHANNEL.send(PacketDistributor.ALL.noArg(), new GirarPacket(colores, indice, reto));
         src.getServer().getPlayerList().broadcastSystemMessage(
                 Component.literal("§6[Ruleta] §f¡La ruleta está girando!"), false);
         return 1;
@@ -106,6 +137,10 @@ public class RuletaServer {
     }
 
     private static int cumplido(CommandSourceStack src) {
+        if (fase == Fase.EJECUCION) {
+            src.sendFailure(Component.literal("Ya es tarde..."));
+            return 0;
+        }
         if (fase != Fase.ACTIVO) {
             src.sendFailure(Component.literal("No hay ningún reto activo."));
             return 0;
@@ -138,6 +173,85 @@ public class RuletaServer {
         return 1;
     }
 
+    // ------------------------------------------------------------ editar retos
+    private static int lista(CommandSourceStack src) {
+        List<Reto> l = RetosConfig.cargar();
+        src.sendSuccess(() -> Component.literal("§6[Ruleta] §fRetos (" + l.size() + "):"), false);
+        for (int i = 0; i < l.size(); i++) {
+            final int num = i + 1;
+            final Reto r = l.get(i);
+            final int rgb = r.rgb(i, l.size());
+            src.sendSuccess(() -> Component.literal("§e" + num + ". ")
+                    .append(Component.literal("■ ").withStyle(Style.EMPTY.withColor(rgb)))
+                    .append(Component.literal("§f" + r.texto())), false);
+        }
+        return 1;
+    }
+
+    private static int agregar(CommandSourceStack src, String color, String condicion) {
+        if (fase != Fase.NINGUNA) {
+            src.sendFailure(Component.literal("Espera a que termine la ruleta en marcha."));
+            return 0;
+        }
+        final String c = color.toLowerCase(Locale.ROOT);
+        final int rgb = Colores.parse(c);
+        if (rgb < 0) {
+            src.sendFailure(Component.literal("Color no válido. Usa: " + String.join(", ", Colores.nombres())
+                    + " o un código hex de 6 dígitos (ej: ff8800)."));
+            return 0;
+        }
+        String t = condicion.replace('|', ' ').trim();
+        if (t.length() > 200) t = t.substring(0, 200);
+        if (t.isEmpty()) {
+            src.sendFailure(Component.literal("Escribe la condición del reto."));
+            return 0;
+        }
+        final String texto = t;
+
+        List<Reto> l = new ArrayList<>(RetosConfig.cargar());
+        if (l.size() >= RetosConfig.MAXIMO) {
+            src.sendFailure(Component.literal("Máximo " + RetosConfig.MAXIMO + " retos. Quita alguno con /ruleta quitar."));
+            return 0;
+        }
+        l.add(new Reto(c, texto));
+        try {
+            RetosConfig.guardar(l);
+        } catch (IOException e) {
+            src.sendFailure(Component.literal("No se pudo guardar el archivo de retos."));
+            return 0;
+        }
+        final int n = l.size();
+        src.sendSuccess(() -> Component.literal("§aAgregado #" + n + ": ")
+                .append(Component.literal("■ ").withStyle(Style.EMPTY.withColor(rgb)))
+                .append(Component.literal("§f" + texto)), false);
+        return 1;
+    }
+
+    private static int quitar(CommandSourceStack src, int numero) {
+        if (fase != Fase.NINGUNA) {
+            src.sendFailure(Component.literal("Espera a que termine la ruleta en marcha."));
+            return 0;
+        }
+        List<Reto> l = new ArrayList<>(RetosConfig.cargar());
+        if (numero > l.size()) {
+            src.sendFailure(Component.literal("No existe el reto #" + numero + " (hay " + l.size() + ")."));
+            return 0;
+        }
+        if (l.size() <= RetosConfig.MINIMO) {
+            src.sendFailure(Component.literal("Debe haber al menos " + RetosConfig.MINIMO + " retos."));
+            return 0;
+        }
+        final Reto quitado = l.remove(numero - 1);
+        try {
+            RetosConfig.guardar(l);
+        } catch (IOException e) {
+            src.sendFailure(Component.literal("No se pudo guardar el archivo de retos."));
+            return 0;
+        }
+        src.sendSuccess(() -> Component.literal("§cQuitado: §f" + quitado.texto()), false);
+        return 1;
+    }
+
     // ------------------------------------------------------------ tiempo
     @SubscribeEvent
     public static void tick(TickEvent.ServerTickEvent event) {
@@ -150,6 +264,10 @@ public class RuletaServer {
 
         if (fase == Fase.GIRANDO) {
             if (--ticks <= 0) activar(server);
+            return;
+        }
+        if (fase == Fase.EJECUCION) {
+            if (--ticks <= 0) ejecutar(server);
             return;
         }
 
@@ -200,10 +318,30 @@ public class RuletaServer {
         }
     }
 
+    /** Se acabo el tiempo: se muestra la calavera a todos y, unos segundos despues, mueren los que no cumplieron. */
     private static void castigar(MinecraftServer server) {
+        condenados.clear();
+        List<String> nombres = new ArrayList<>();
         for (ServerPlayer p : server.getPlayerList().getPlayers()) {
             if (!participantes.contains(p.getUUID()) || cumplidos.contains(p.getUUID())) continue;
             if (!p.isAlive()) continue;
+            condenados.add(p.getUUID());
+            nombres.add(p.getName().getString());
+        }
+        if (condenados.isEmpty()) {
+            reiniciar();
+            return;
+        }
+        fase = Fase.EJECUCION;
+        ticks = TICKS_EJECUCION;
+        server.getPlayerList().broadcastSystemMessage(
+                Component.literal("§c§l[Ruleta] ¡Se acabó el tiempo!"), false);
+        Net.CHANNEL.send(PacketDistributor.ALL.noArg(), new MuertePacket(nombres));
+    }
+
+    private static void ejecutar(MinecraftServer server) {
+        for (ServerPlayer p : server.getPlayerList().getPlayers()) {
+            if (!condenados.contains(p.getUUID()) || !p.isAlive()) continue;
             server.getPlayerList().broadcastSystemMessage(Component.literal(
                     "§c" + p.getName().getString() + " no cumplió el reto y murió."), false);
             p.hurt(p.damageSources().genericKill(), Float.MAX_VALUE);
@@ -216,5 +354,6 @@ public class RuletaServer {
         ticks = 0;
         participantes.clear();
         cumplidos.clear();
+        condenados.clear();
     }
 }

@@ -2,6 +2,7 @@ package com.ruleta.client;
 
 import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.blaze3d.vertex.BufferBuilder;
+import com.mojang.blaze3d.vertex.BufferUploader;
 import com.mojang.blaze3d.vertex.DefaultVertexFormat;
 import com.mojang.blaze3d.vertex.Tesselator;
 import com.mojang.blaze3d.vertex.VertexFormat;
@@ -159,7 +160,6 @@ public class RuletaScreen extends Screen {
         RenderSystem.enableBlend();
         RenderSystem.defaultBlendFunc();
         RenderSystem.disableCull();
-        RenderSystem.setShader(GameRenderer::getPositionColorShader);
         dibujarRueda(m, cx, cy, r, t);
         RenderSystem.enableCull();
         RenderSystem.disableBlend();
@@ -210,8 +210,7 @@ public class RuletaScreen extends Screen {
         }
 
         // Lineas separadoras
-        BufferBuilder b = Tesselator.getInstance().getBuilder();
-        b.begin(VertexFormat.Mode.QUADS, DefaultVertexFormat.POSITION_COLOR);
+        BufferBuilder b = comenzar(VertexFormat.Mode.QUADS);
         for (int i = 0; i < n; i++) {
             float a = angulo + i * seg;
             float c = Mth.cos(a);
@@ -224,7 +223,7 @@ public class RuletaScreen extends Screen {
             vert(b, m, cx + c * r - nx, cy + s * r - ny, col);
             vert(b, m, cx - nx, cy - ny, col);
         }
-        Tesselator.getInstance().end();
+        dibujar(b);
 
         // Bombillas del aro: corren mientras gira y parpadean al terminar
         for (int k = 0; k < BOMBILLAS; k++) {
@@ -337,11 +336,19 @@ public class RuletaScreen extends Screen {
     }
 
     // ------------------------------------------------------------------ dibujo
+    private static BufferBuilder comenzar(VertexFormat.Mode modo) {
+        RenderSystem.setShader(GameRenderer::getPositionColorShader);
+        return Tesselator.getInstance().begin(modo, DefaultVertexFormat.POSITION_COLOR);
+    }
+
+    private static void dibujar(BufferBuilder b) {
+        BufferUploader.drawWithShader(b.buildOrThrow());
+    }
+
     /** Sector circular (o anillo) con degradado de color entre el borde interior y el exterior. */
     private static void sector(Matrix4f m, float cx, float cy, float rIn, float rOut,
                                float a0, float a1, int cIn, int cOut, int pasos) {
-        BufferBuilder b = Tesselator.getInstance().getBuilder();
-        b.begin(VertexFormat.Mode.TRIANGLE_STRIP, DefaultVertexFormat.POSITION_COLOR);
+        BufferBuilder b = comenzar(VertexFormat.Mode.TRIANGLE_STRIP);
         for (int k = 0; k <= pasos; k++) {
             float a = a0 + (a1 - a0) * k / pasos;
             float c = Mth.cos(a);
@@ -349,25 +356,22 @@ public class RuletaScreen extends Screen {
             vert(b, m, cx + c * rIn, cy + s * rIn, cIn);
             vert(b, m, cx + c * rOut, cy + s * rOut, cOut);
         }
-        Tesselator.getInstance().end();
+        dibujar(b);
     }
 
     private static void triangulo(Matrix4f m, float px, float py, float[][] pts, float esc,
                                   float cs, float sn, int argb) {
-        BufferBuilder b = Tesselator.getInstance().getBuilder();
-        b.begin(VertexFormat.Mode.TRIANGLES, DefaultVertexFormat.POSITION_COLOR);
+        BufferBuilder b = comenzar(VertexFormat.Mode.TRIANGLES);
         for (float[] p : pts) {
             float x = p[0] * esc;
             float y = p[1] * esc;
             vert(b, m, px + x * cs - y * sn, py + x * sn + y * cs, argb);
         }
-        Tesselator.getInstance().end();
+        dibujar(b);
     }
 
     private static void vert(BufferBuilder b, Matrix4f m, float x, float y, int argb) {
-        b.vertex(m, x, y, 0)
-                .color((argb >> 16) & 255, (argb >> 8) & 255, argb & 255, (argb >>> 24) & 255)
-                .endVertex();
+        b.addVertex(m, x, y, 0f).setColor(argb);
     }
 
     private static int mul(int rgb, float f) {
@@ -382,6 +386,11 @@ public class RuletaScreen extends Screen {
         float c3 = c1 + 1f;
         float y = x - 1f;
         return 1f + c3 * y * y * y + c1 * y * y;
+    }
+
+    @Override
+    public void renderBackground(GuiGraphics g, int mouseX, int mouseY, float partialTick) {
+        // El fondo oscuro lo dibuja render() con su propia animacion.
     }
 
     @Override

@@ -5,12 +5,11 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.util.Mth;
-import net.minecraftforge.client.gui.overlay.ForgeGui;
 
 import java.util.ArrayList;
 import java.util.List;
 
-/** Animacion de calavera que aparece en pantalla cuando se acaba el tiempo (no bloquea el juego). */
+/** Animacion de calavera que aparece en pantalla cuando alguien muere (no bloquea el juego). */
 public class MuerteOverlay {
 
     private static final String[] CALAVERA = {
@@ -35,14 +34,27 @@ public class MuerteOverlay {
     private static final long DURACION_MS = 3200L;
 
     private static List<String> nombres = new ArrayList<>();
+    private static boolean castigo = false;
     private static long inicio = -1L;
 
-    public static void iniciar(List<String> lista) {
+    /** Devuelve true si empezo una animacion nueva (false si solo se sumaron nombres a la que ya corria). */
+    public static boolean iniciar(List<String> lista, boolean esCastigo) {
+        long ahora = Util.getMillis();
+        boolean activa = inicio >= 0 && ahora - inicio < 1500L;
+        if (activa) {
+            for (String n : lista) {
+                if (!nombres.contains(n)) nombres.add(n);
+            }
+            castigo = castigo || esCastigo;
+            return false;
+        }
         nombres = new ArrayList<>(lista);
-        inicio = Util.getMillis();
+        castigo = esCastigo;
+        inicio = ahora;
+        return true;
     }
 
-    public static void render(ForgeGui gui, GuiGraphics g, float partialTick, int w, int h) {
+    public static void render(GuiGraphics g, int w, int h) {
         if (inicio < 0) return;
         long ms = Util.getMillis() - inicio;
         if (ms >= DURACION_MS) {
@@ -110,7 +122,13 @@ public class MuerteOverlay {
 
         // Textos
         float aTexto = fade * Mth.clamp((s - 0.5f) / 0.3f, 0f, 1f);
-        String titulo = nombres.size() > 1 ? "ELIMINADOS" : "ELIMINADO";
+        boolean varios = nombres.size() > 1;
+        String titulo;
+        if (castigo) {
+            titulo = varios ? "ELIMINADOS" : "ELIMINADO";
+        } else {
+            titulo = varios ? "HAN MUERTO" : "HA MUERTO";
+        }
         texto(g, font, titulo, w / 2 + dx, (int) (h * 0.10f) + dy, 3.5f, argb(fade, 0xFF, 0x30, 0x30));
 
         int y = baseY + 8 * cell + 14;
@@ -123,7 +141,9 @@ public class MuerteOverlay {
             texto(g, font, "y " + (nombres.size() - mostrar) + " más", w / 2, y, 1.5f, argb(aTexto, 0xFF, 0xFF, 0xFF));
             y += 18;
         }
-        texto(g, font, "no cumplió el reto", w / 2, y + 2, 1.3f, argb(aTexto, 0xDD, 0xAA, 0xAA));
+        if (castigo) {
+            texto(g, font, "no cumplió el reto", w / 2, y + 2, 1.3f, argb(aTexto, 0xDD, 0xAA, 0xAA));
+        }
     }
 
     private static void texto(GuiGraphics g, Font font, String s, int x, int y, float esc, int argb) {

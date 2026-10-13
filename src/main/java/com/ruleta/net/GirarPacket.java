@@ -1,11 +1,7 @@
 package com.ruleta.net;
 
 import net.minecraft.network.FriendlyByteBuf;
-import net.minecraftforge.api.distmarker.Dist;
-import net.minecraftforge.fml.DistExecutor;
-import net.minecraftforge.network.NetworkEvent;
-
-import java.util.function.Supplier;
+import net.minecraftforge.event.network.CustomPayloadEvent;
 
 /**
  * Servidor -> clientes: "gira la ruleta con estos colores y que caiga en este sector".
@@ -39,10 +35,8 @@ public class GirarPacket {
         return new GirarPacket(colores, indice, texto);
     }
 
-    public static void handle(GirarPacket p, Supplier<NetworkEvent.Context> ctx) {
-        NetworkEvent.Context c = ctx.get();
-        c.enqueueWork(() -> DistExecutor.unsafeRunWhenOn(Dist.CLIENT,
-                () -> () -> com.ruleta.client.ClientHooks.abrirRuleta(p.colores, p.indice, p.texto)));
-        c.setPacketHandled(true);
+    /** Solo se ejecuta en el cliente (el paquete va del servidor hacia los clientes). */
+    public static void handle(GirarPacket p, CustomPayloadEvent.Context ctx) {
+        com.ruleta.client.ClientHooks.abrirRuleta(p.colores, p.indice, p.texto);
     }
 }

@@ -16,10 +16,11 @@ public class ClientHooks {
         mc.setScreen(new RuletaScreen(colores, i, texto));
     }
 
-    public static void mostrarMuerte(List<String> nombres) {
+    public static void mostrarMuerte(List<String> nombres, boolean castigo) {
         Minecraft mc = Minecraft.getInstance();
         if (mc.player == null) return;
-        MuerteOverlay.iniciar(nombres);
-        mc.getSoundManager().play(SimpleSoundInstance.forUI(SoundEvents.WITHER_DEATH, 0.9f, 0.6f));
+        if (MuerteOverlay.iniciar(nombres, castigo)) {
+            mc.getSoundManager().play(SimpleSoundInstance.forUI(SoundEvents.WITHER_DEATH, 0.9f, 0.6f));
+        }
     }
 }

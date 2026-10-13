@@ -22,6 +22,7 @@ import net.minecraft.sounds.SoundEvents;
 import net.minecraft.sounds.SoundSource;
 import net.minecraftforge.event.RegisterCommandsEvent;
 import net.minecraftforge.event.TickEvent;
+import net.minecraftforge.event.entity.living.LivingDeathEvent;
 import net.minecraftforge.event.server.ServerStoppedEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.common.Mod;
@@ -42,6 +43,7 @@ import java.util.UUID;
  * /cumplido                     -> cada jugador avisa que cumplio el reto.
  * /ruleta agregar <color> <reto>, /ruleta quitar <n>, /ruleta lista  -> editar los retos (operadores).
  * Quien no escriba /cumplido antes de que se acabe el tiempo muere al instante.
+ * Cada vez que muere un jugador (por la ruleta o por cualquier causa) sale la animacion de la calavera.
  */
 @Mod.EventBusSubscriber(modid = RuletaMod.MODID, bus = Mod.EventBusSubscriber.Bus.FORGE)
 public class RuletaServer {
@@ -55,6 +57,7 @@ public class RuletaServer {
     private static int ticks = 0;
     private static int segundosLimite = 60;
     private static String reto = "";
+    private static boolean ejecutando = false;
     private static final Set<UUID> participantes = new HashSet<>();
     private static final Set<UUID> cumplidos = new HashSet<>();
     private static final Set<UUID> condenados = new HashSet<>();
@@ -119,7 +122,7 @@ public class RuletaServer {
         condenados.clear();
 
         // El servidor elige el resultado, todos ven el mismo y solo se envia el reto ganador.
-        Net.CHANNEL.send(PacketDistributor.ALL.noArg(), new GirarPacket(colores, indice, reto));
+        Net.CHANNEL.send(new GirarPacket(colores, indice, reto), PacketDistributor.ALL.noArg());
         src.getServer().getPlayerList().broadcastSystemMessage(
                 Component.literal("§6[Ruleta] §f¡La ruleta está girando!"), false);
         return 1;
@@ -252,6 +255,16 @@ public class RuletaServer {
         return 1;
     }
 
+    // ------------------------------------------------------------ animacion en cada muerte
+    @SubscribeEvent
+    public static void alMorir(LivingDeathEvent event) {
+        if (!(event.getEntity() instanceof ServerPlayer jugador)) return;
+        if (ejecutando) return; // la ruleta ya mostro la animacion antes de matar
+        List<String> nombres = new ArrayList<>();
+        nombres.add(jugador.getName().getString());
+        Net.CHANNEL.send(new MuertePacket(nombres, false), PacketDistributor.ALL.noArg());
+    }
+
     // ------------------------------------------------------------ tiempo
     @SubscribeEvent
     public static void tick(TickEvent.ServerTickEvent event) {
@@ -336,15 +349,20 @@ public class RuletaServer {
         ticks = TICKS_EJECUCION;
         server.getPlayerList().broadcastSystemMessage(
                 Component.literal("§c§l[Ruleta] ¡Se acabó el tiempo!"), false);
-        Net.CHANNEL.send(PacketDistributor.ALL.noArg(), new MuertePacket(nombres));
+        Net.CHANNEL.send(new MuertePacket(nombres, true), PacketDistributor.ALL.noArg());
     }
 
     private static void ejecutar(MinecraftServer server) {
-        for (ServerPlayer p : server.getPlayerList().getPlayers()) {
-            if (!condenados.contains(p.getUUID()) || !p.isAlive()) continue;
-            server.getPlayerList().broadcastSystemMessage(Component.literal(
-                    "§c" + p.getName().getString() + " no cumplió el reto y murió."), false);
-            p.hurt(p.damageSources().genericKill(), Float.MAX_VALUE);
+        ejecutando = true;
+        try {
+            for (ServerPlayer p : server.getPlayerList().getPlayers()) {
+                if (!condenados.contains(p.getUUID()) || !p.isAlive()) continue;
+                server.getPlayerList().broadcastSystemMessage(Component.literal(
+                        "§c" + p.getName().getString() + " no cumplió el reto y murió."), false);
+                p.hurt(p.damageSources().genericKill(), Float.MAX_VALUE);
+            }
+        } finally {
+            ejecutando = false;
         }
         reiniciar();
     }

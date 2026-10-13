@@ -13,11 +13,11 @@ jobs:
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: '21'
 
       - uses: gradle/actions/setup-gradle@v3
         with:
-          gradle-version: 8.1.1
+          gradle-version: 8.8
 
       - name: Compilar
         run: gradle build --no-daemon
@@ -25,4 +25,4 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: ruleta-mod
-          path: build/libs/ruleta-1.0.0.jar
+          path: build/libs/*.jar

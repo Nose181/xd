@@ -10,12 +10,15 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 
-/** Lee y guarda los retos en config/ruleta-retos.txt (formato:  color|reto). */
+/** Lee y guarda los retos en config/ruleta-retos.txt (formato:  color|tiempo|modo|reto). */
 public class RetosConfig {
 
     public static final int MINIMO = 2;
     public static final int MAXIMO = 24;
+    public static final int SEG_MIN = 10;
+    public static final int SEG_MAX = 600;
 
     private static final List<Reto> POR_DEFECTO = List.of(
             new Reto("rojo", "Haz 10 saltos seguidos"),
@@ -34,6 +37,26 @@ public class RetosConfig {
         return FMLPaths.CONFIGDIR.get().resolve("ruleta-retos.txt");
     }
 
+    /** "sin" -> 0, un numero de 10 a 600 -> ese numero, cualquier otra cosa -> -1. */
+    public static int parseTiempo(String texto) {
+        String s = texto.trim().toLowerCase(Locale.ROOT);
+        if (s.equals("sin")) return 0;
+        try {
+            int n = Integer.parseInt(s);
+            return (n >= SEG_MIN && n <= SEG_MAX) ? n : -1;
+        } catch (NumberFormatException e) {
+            return -1;
+        }
+    }
+
+    /** "cumplido" -> true, "aviso" -> false, otra cosa -> null. */
+    public static Boolean parseModo(String texto) {
+        String s = texto.trim().toLowerCase(Locale.ROOT);
+        if (s.equals("cumplido")) return Boolean.TRUE;
+        if (s.equals("aviso")) return Boolean.FALSE;
+        return null;
+    }
+
     public static List<Reto> cargar() {
         Path p = archivo();
         try {
@@ -42,14 +65,29 @@ public class RetosConfig {
             for (String linea : Files.readAllLines(p, StandardCharsets.UTF_8)) {
                 String s = linea.replace("\uFEFF", "").trim();
                 if (s.isEmpty() || s.startsWith("#")) continue;
+
+                // Formato nuevo: color|tiempo|modo|texto
+                String[] partes = s.split("\\|", 4);
+                if (partes.length == 4) {
+                    String c = partes[0].trim().toLowerCase(Locale.ROOT);
+                    int t = parseTiempo(partes[1]);
+                    Boolean modo = parseModo(partes[2]);
+                    String texto = partes[3].trim();
+                    if ((c.equals("auto") || Colores.parse(c) >= 0) && t >= 0 && modo != null && !texto.isEmpty()) {
+                        retos.add(new Reto(c.equals("auto") ? "" : c, t, modo, texto));
+                        continue;
+                    }
+                }
+
+                // Formato antiguo: color|reto (60 segundos y con /cumplido), o solo el texto
                 String color = "";
                 String texto = s;
                 int barra = s.indexOf('|');
                 if (barra > 0 && Colores.parse(s.substring(0, barra)) >= 0) {
-                    color = s.substring(0, barra).trim().toLowerCase();
+                    color = s.substring(0, barra).trim().toLowerCase(Locale.ROOT);
                     texto = s.substring(barra + 1).trim();
                 }
-                if (!texto.isEmpty()) retos.add(new Reto(color, texto));
+                if (!texto.isEmpty()) retos.add(new Reto(color, 60, true, texto));
             }
             if (retos.size() >= MINIMO) {
                 return retos.size() > MAXIMO ? new ArrayList<>(retos.subList(0, MAXIMO)) : retos;
@@ -62,12 +100,18 @@ public class RetosConfig {
 
     public static void guardar(List<Reto> retos) throws IOException {
         List<String> lineas = new ArrayList<>();
-        lineas.add("# Un reto por línea con el formato:  color|reto");
-        lineas.add("# Colores: " + String.join(", ", Colores.nombres()) + " o un código hex de 6 dígitos (ej: ff8800).");
-        lineas.add("# Si no pones color se asigna uno automático. Las líneas que empiezan con # se ignoran.");
+        lineas.add("# Un reto por línea con el formato:  color|tiempo|modo|texto");
+        lineas.add("#   color:  " + String.join(", ", Colores.nombres()) + ", auto, o un código hex de 6 dígitos (ej: ff8800)");
+        lineas.add("#   tiempo: 'sin' (sin límite) o segundos, de " + SEG_MIN + " a " + SEG_MAX);
+        lineas.add("#   modo:   'cumplido' (hay que escribir /cumplido; quien no lo haga a tiempo muere)");
+        lineas.add("#           'aviso' (solo se anuncia el texto, nadie muere)");
+        lineas.add("# Las líneas antiguas 'color|texto' siguen funcionando (60 s y con /cumplido).");
         lineas.add("# Mínimo " + MINIMO + " retos, máximo " + MAXIMO + ". Lo más cómodo: /ruleta agregar y /ruleta quitar.");
         for (Reto r : retos) {
-            lineas.add((r.color() == null || r.color().isEmpty() ? "" : r.color() + "|") + r.texto());
+            String color = (r.color() == null || r.color().isEmpty()) ? "auto" : r.color();
+            String tiempo = r.segundos() > 0 ? String.valueOf(r.segundos()) : "sin";
+            String modo = r.cumplido() ? "cumplido" : "aviso";
+            lineas.add(color + "|" + tiempo + "|" + modo + "|" + r.texto());
         }
         Files.write(archivo(), lineas, StandardCharsets.UTF_8);
     }

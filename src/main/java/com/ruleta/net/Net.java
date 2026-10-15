@@ -29,5 +29,26 @@ public class Net {
                 .decoder(MuertePacket::decode)
                 .consumerMainThread(MuertePacket::handle)
                 .add();
+
+        CHANNEL.messageBuilder(AvisoPacket.class, 2)
+                .direction(PacketFlow.CLIENTBOUND)
+                .encoder(AvisoPacket::encode)
+                .decoder(AvisoPacket::decode)
+                .consumerMainThread(AvisoPacket::handle)
+                .add();
+
+        CHANNEL.messageBuilder(PanelPacket.class, 3)
+                .direction(PacketFlow.CLIENTBOUND)
+                .encoder(PanelPacket::encode)
+                .decoder(PanelPacket::decode)
+                .consumerMainThread(PanelPacket::handle)
+                .add();
+
+        CHANNEL.messageBuilder(PanelAccionPacket.class, 4)
+                .direction(PacketFlow.SERVERBOUND)
+                .encoder(PanelAccionPacket::encode)
+                .decoder(PanelAccionPacket::decode)
+                .consumerMainThread(PanelAccionPacket::handle)
+                .add();
     }
 }

@@ -23,7 +23,7 @@ public class GirarPacket {
         buf.writeVarInt(p.colores.length);
         for (int c : p.colores) buf.writeInt(c);
         buf.writeVarInt(p.indice);
-        buf.writeUtf(p.texto, 256);
+        buf.writeUtf(p.texto, 1100);
     }
 
     public static GirarPacket decode(FriendlyByteBuf buf) {
@@ -31,7 +31,7 @@ public class GirarPacket {
         int[] colores = new int[n];
         for (int i = 0; i < n; i++) colores[i] = buf.readInt();
         int indice = buf.readVarInt();
-        String texto = buf.readUtf(256);
+        String texto = buf.readUtf(1100);
         return new GirarPacket(colores, indice, texto);
     }
 

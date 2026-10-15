@@ -4,18 +4,18 @@ import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import com.ruleta.client.RetosConfig;
+import com.ruleta.net.AvisoPacket;
 import com.ruleta.net.GirarPacket;
 import com.ruleta.net.MuertePacket;
 import com.ruleta.net.Net;
-import net.minecraft.ChatFormatting;
+import com.ruleta.net.PanelAccionPacket;
+import com.ruleta.net.PanelPacket;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
 import net.minecraft.commands.SharedSuggestionProvider;
 import net.minecraft.network.chat.Component;
+import net.minecraft.network.chat.MutableComponent;
 import net.minecraft.network.chat.Style;
-import net.minecraft.network.protocol.game.ClientboundSetSubtitleTextPacket;
-import net.minecraft.network.protocol.game.ClientboundSetTitleTextPacket;
-import net.minecraft.network.protocol.game.ClientboundSetTitlesAnimationPacket;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.sounds.SoundEvents;
@@ -41,6 +41,7 @@ import java.util.UUID;
 /**
  * /ruleta [segundos]  -> la ruleta gira en la pantalla de TODOS y sale un reto.
  * /cumplido           -> cada jugador avisa que cumplio el reto (si el reto lo pide).
+ * /ruleta panel       -> abre el panel de control (operadores).
  * /ruleta agregar <color> <tiempo|sin> <cumplido|aviso> <texto>, /ruleta quitar <n>,
  * /ruleta lista, /ruleta probar <n>, /ruleta cancelar  -> administrar (operadores).
  *
@@ -60,6 +61,9 @@ public class RuletaServer {
     private static int cuenta = 0;
     private static int segundosLimite = 0;          // 0 = sin tiempo
     private static Reto retoActual = null;
+    private static int colorAviso = 0xFFAA00;
+    private static boolean avisoActivo = true;      // si al terminar de girar se muestra el cuadro de aviso
+    private static boolean avisoMostrado = false;   // si hay un cuadro de aviso en pantalla de los jugadores
     private static boolean ejecutando = false;
     private static final Set<UUID> participantes = new HashSet<>();
     private static final Set<UUID> cumplidos = new HashSet<>();
@@ -78,6 +82,9 @@ public class RuletaServer {
                 .then(Commands.argument("segundos", IntegerArgumentType.integer(RetosConfig.SEG_MIN, RetosConfig.SEG_MAX))
                         .executes(ctx -> iniciar(ctx.getSource(),
                                 IntegerArgumentType.getInteger(ctx, "segundos"), -1)))
+                .then(Commands.literal("panel")
+                        .requires(RuletaServer::puedeAdministrar)
+                        .executes(ctx -> panel(ctx.getSource())))
                 .then(Commands.literal("cancelar")
                         .requires(RuletaServer::puedeAdministrar)
                         .executes(ctx -> cancelar(ctx.getSource())))
@@ -121,18 +128,101 @@ public class RuletaServer {
                 && src.getServer().isSingleplayerOwner(sp.getGameProfile());
     }
 
-    /** override = segundos pedidos con /ruleta <segundos> (0 = ninguno); forzado = indice a probar (-1 = al azar). */
-    private static int iniciar(CommandSourceStack src, int override, int forzado) {
-        if (fase != Fase.NINGUNA) {
-            src.sendFailure(Component.literal("Ya hay una ruleta en marcha."));
+    private static int panel(CommandSourceStack src) {
+        if (!(src.getEntity() instanceof ServerPlayer jugador)) {
+            src.sendFailure(Component.literal("Solo un jugador puede abrir el panel."));
             return 0;
         }
+        enviarPanel(jugador, 0);
+        return 1;
+    }
+
+    private static void enviarPanel(ServerPlayer jugador, int seleccionado) {
+        Net.CHANNEL.send(new PanelPacket(RetosConfig.cargar(), seleccionado), PacketDistributor.PLAYER.with(jugador));
+    }
+
+    // ------------------------------------------------------------ acciones del panel
+    /** Lo que llega desde el panel de control (siempre se comprueba que sea operador). */
+    public static void panelAccion(ServerPlayer jugador, PanelAccionPacket a) {
+        if (!puedeAdministrar(jugador.createCommandSourceStack())) {
+            jugador.sendSystemMessage(Component.literal("§cNo tienes permiso para usar el panel de la ruleta."));
+            return;
+        }
+        MinecraftServer server = jugador.getServer();
+        if (server == null) return;
+
+        if (a.accion == PanelAccionPacket.DETENER) {
+            detener(server);
+            return;
+        }
+
+        List<Reto> retos = new ArrayList<>(RetosConfig.cargar());
+        if (a.indice < 0 || a.indice >= retos.size()) return;
+        Reto base = retos.get(a.indice);
+
+        String titulo = Textos.limpiarTitulo(a.titulo);
+        String texto = Textos.limpiarTexto(a.mensaje);
+        int seg = a.segundos;
+        if (seg != 0 && (seg < RetosConfig.SEG_MIN || seg > RetosConfig.SEG_MAX)) seg = base.segundos();
+        if (texto.isEmpty()) {
+            jugador.sendSystemMessage(Component.literal("§cEscribe un mensaje primero."));
+            return;
+        }
+        Reto editado = new Reto(base.color(), seg, a.cumplido, titulo, texto);
+        int rgb = base.rgb(a.indice, retos.size());
+
+        switch (a.accion) {
+            case PanelAccionPacket.GUARDAR -> {
+                if (fase != Fase.NINGUNA) {
+                    jugador.sendSystemMessage(Component.literal("§cEspera a que termine la ruleta en marcha."));
+                    return;
+                }
+                retos.set(a.indice, editado);
+                try {
+                    RetosConfig.guardar(retos);
+                } catch (IOException e) {
+                    jugador.sendSystemMessage(Component.literal("§cNo se pudo guardar el archivo de retos."));
+                    return;
+                }
+                jugador.sendSystemMessage(Component.literal("§aGuardado."));
+                enviarPanel(jugador, a.indice);
+            }
+            case PanelAccionPacket.LANZAR -> {
+                String error = lanzar(server, 0, a.indice, editado, a.aviso);
+                if (error != null) jugador.sendSystemMessage(Component.literal("§c" + error));
+            }
+            case PanelAccionPacket.SOLO_AVISO -> {
+                String t = titulo.isEmpty() ? "AVISO" : titulo;
+                mostrarAviso(server, t, texto, rgb, 0, false);
+                sonido(server);
+            }
+            default -> { }
+        }
+    }
+
+    // ------------------------------------------------------------ iniciar / detener
+    /** override = segundos pedidos con /ruleta <segundos> (0 = ninguno); forzado = indice a probar (-1 = al azar). */
+    private static int iniciar(CommandSourceStack src, int override, int forzado) {
+        String error = lanzar(src.getServer(), override, forzado, null, true);
+        if (error != null) {
+            src.sendFailure(Component.literal(error));
+            return 0;
+        }
+        return 1;
+    }
+
+    /** Devuelve null si todo salio bien, o el texto del error. */
+    private static String lanzar(MinecraftServer server, int override, int forzado, Reto personalizado, boolean aviso) {
+        if (fase != Fase.NINGUNA) return "Ya hay una ruleta en marcha.";
+
         List<Reto> retos = RetosConfig.cargar();
         int n = retos.size();
         int[] colores = new int[n];
         for (int i = 0; i < n; i++) colores[i] = retos.get(i).rgb(i, n);
         int indice = forzado >= 0 ? Math.min(forzado, n - 1) : new Random().nextInt(n);
-        retoActual = retos.get(indice);
+        retoActual = personalizado != null ? personalizado : retos.get(indice);
+        colorAviso = colores[indice];
+        avisoActivo = aviso;
 
         // Un reto "sin tiempo" ignora el tiempo pedido; uno con tiempo puede cambiarlo con /ruleta <segundos>.
         segundosLimite = retoActual.tieneTiempo() ? (override > 0 ? override : retoActual.segundos()) : 0;
@@ -146,9 +236,9 @@ public class RuletaServer {
 
         // El servidor elige el resultado, todos ven el mismo y solo se envia el reto ganador.
         Net.CHANNEL.send(new GirarPacket(colores, indice, retoActual.texto()), PacketDistributor.ALL.noArg());
-        src.getServer().getPlayerList().broadcastSystemMessage(
+        server.getPlayerList().broadcastSystemMessage(
                 Component.literal("§6[Ruleta] §f¡La ruleta está girando!"), false);
-        return 1;
+        return null;
     }
 
     private static int probar(CommandSourceStack src, int numero) {
@@ -161,14 +251,24 @@ public class RuletaServer {
     }
 
     private static int cancelar(CommandSourceStack src) {
-        if (fase == Fase.NINGUNA) {
-            src.sendFailure(Component.literal("No hay ninguna ruleta en marcha."));
+        if (fase == Fase.NINGUNA && !avisoMostrado) {
+            src.sendFailure(Component.literal("No hay nada en marcha."));
             return 0;
         }
-        reiniciar();
-        src.getServer().getPlayerList().broadcastSystemMessage(
-                Component.literal("§6[Ruleta] §fRuleta cancelada. Nadie muere."), false);
+        detener(src.getServer());
         return 1;
+    }
+
+    /** Para todo: la ruleta en marcha, el castigo pendiente y el cuadro de aviso. Nadie muere. */
+    private static void detener(MinecraftServer server) {
+        boolean habia = fase != Fase.NINGUNA || avisoMostrado;
+        reiniciar(false);
+        avisoMostrado = false;
+        Net.CHANNEL.send(AvisoPacket.quitar(), PacketDistributor.ALL.noArg());
+        if (habia) {
+            server.getPlayerList().broadcastSystemMessage(
+                    Component.literal("§6[Ruleta] §fDetenida. Nadie muere."), false);
+        }
     }
 
     private static int cumplido(CommandSourceStack src) {
@@ -200,7 +300,7 @@ public class RuletaServer {
         if (!hayPendientes(server)) {
             server.getPlayerList().broadcastSystemMessage(
                     Component.literal("§6[Ruleta] §a¡Todos cumplieron el reto! Nadie muere."), false);
-            reiniciar();
+            reiniciar(true);
         }
         return 1;
     }
@@ -212,11 +312,18 @@ public class RuletaServer {
         return false;
     }
 
-    // ------------------------------------------------------------ editar retos
+    // ------------------------------------------------------------ editar retos con comandos
+    private static String resumen(String texto) {
+        String t = texto.replace("\n", " ");
+        if (t.length() > 60) t = t.substring(0, 57) + "...";
+        return Textos.colorear(t) + "§r";
+    }
+
     private static String descripcion(Reto r) {
         String tiempo = r.tieneTiempo() ? r.segundos() + " s" : "sin tiempo";
         String modo = r.cumplido() ? "/cumplido" : "aviso";
-        return "§7[" + tiempo + ", " + modo + "] §f" + r.texto();
+        String titulo = (r.titulo() == null || r.titulo().isEmpty()) ? "" : "§l" + Textos.colorear(r.titulo()) + "§r§f: ";
+        return "§7[" + tiempo + ", " + modo + "] §f" + titulo + resumen(r.texto());
     }
 
     private static int lista(CommandSourceStack src) {
@@ -256,8 +363,7 @@ public class RuletaServer {
             src.sendFailure(Component.literal("Modo no válido. Usa 'cumplido' (hay que escribir /cumplido) o 'aviso' (solo se anuncia)."));
             return 0;
         }
-        String t = texto.replace('|', ' ').trim();
-        if (t.length() > 200) t = t.substring(0, 200);
+        String t = Textos.limpiarTexto(Textos.desdeArchivo(texto));
         if (t.isEmpty()) {
             src.sendFailure(Component.literal("Escribe el texto del reto."));
             return 0;
@@ -305,7 +411,7 @@ public class RuletaServer {
             src.sendFailure(Component.literal("No se pudo guardar el archivo de retos."));
             return 0;
         }
-        src.sendSuccess(() -> Component.literal("§cQuitado: §f" + quitado.texto()), false);
+        src.sendSuccess(() -> Component.literal("§cQuitado: §f" + resumen(quitado.texto())), false);
         return 1;
     }
 
@@ -325,7 +431,7 @@ public class RuletaServer {
         if (event.phase != TickEvent.Phase.END || fase == Fase.NINGUNA) return;
         MinecraftServer server = ServerLifecycleHooks.getCurrentServer();
         if (server == null || retoActual == null) {
-            reiniciar();
+            reiniciar(true);
             return;
         }
 
@@ -339,6 +445,7 @@ public class RuletaServer {
         }
 
         // Fase ACTIVO
+        String titulo = Textos.colorear(retoActual.tituloVisible());
         if (segundosLimite > 0) {
             ticks--;
             if (ticks > 0 && ticks % 20 == 0) {
@@ -346,12 +453,11 @@ public class RuletaServer {
                 for (ServerPlayer p : server.getPlayerList().getPlayers()) {
                     if (retoActual.cumplido()) {
                         if (participantes.contains(p.getUUID()) && !cumplidos.contains(p.getUUID())) {
-                            p.displayClientMessage(Component.literal("§e" + retoActual.texto()
+                            p.displayClientMessage(Component.literal("§e" + titulo
                                     + " §c(" + seg + " s) §7- escribe /cumplido"), true);
                         }
                     } else {
-                        p.displayClientMessage(Component.literal("§e" + retoActual.texto()
-                                + " §c(" + seg + " s)"), true);
+                        p.displayClientMessage(Component.literal("§e" + titulo + " §c(" + seg + " s)"), true);
                     }
                 }
             }
@@ -361,7 +467,7 @@ public class RuletaServer {
                 } else {
                     server.getPlayerList().broadcastSystemMessage(
                             Component.literal("§6[Ruleta] §f¡Se acabó el tiempo!"), false);
-                    reiniciar();
+                    reiniciar(true);
                 }
             }
         } else {
@@ -369,12 +475,12 @@ public class RuletaServer {
             cuenta++;
             if (cuenta % 100 == 0) {
                 if (!hayPendientes(server)) {
-                    reiniciar();
+                    reiniciar(true);
                     return;
                 }
                 for (ServerPlayer p : server.getPlayerList().getPlayers()) {
                     if (participantes.contains(p.getUUID()) && !cumplidos.contains(p.getUUID())) {
-                        p.displayClientMessage(Component.literal("§e" + retoActual.texto()
+                        p.displayClientMessage(Component.literal("§e" + titulo
                                 + " §7- escribe /cumplido cuando lo cumplas"), true);
                     }
                 }
@@ -384,13 +490,45 @@ public class RuletaServer {
 
     @SubscribeEvent
     public static void servidorDetenido(ServerStoppedEvent event) {
-        reiniciar();
+        avisoMostrado = false;
+        reiniciar(false);
+    }
+
+    // ------------------------------------------------------------ aviso (cuadro arriba a la izquierda + chat)
+    private static String instruccion(boolean exige, int seg) {
+        if (exige && seg > 0) return "§7Tienen " + seg + " s. Al cumplirlo escribe /cumplido. ¡Quien no lo haga, muere!";
+        if (exige) return "§7Sin límite de tiempo. Al cumplirlo escribe /cumplido.";
+        if (seg > 0) return "§7Tienen " + seg + " s.";
+        return "";
+    }
+
+    private static void mostrarAviso(MinecraftServer server, String titulo, String texto,
+                                     int rgb, int segundos, boolean pideCumplido) {
+        // Cuadro de aviso arriba a la izquierda (se oculta con la tecla I)
+        Net.CHANNEL.send(new AvisoPacket(titulo, texto, rgb, segundos, pideCumplido, false),
+                PacketDistributor.ALL.noArg());
+        avisoMostrado = true;
+
+        // Y el mismo aviso en el chat
+        MutableComponent cabecera = Component.literal("● " + Textos.colorear(titulo) + ":")
+                .withStyle(Style.EMPTY.withColor(rgb).withBold(true));
+        server.getPlayerList().broadcastSystemMessage(cabecera, false);
+        server.getPlayerList().broadcastSystemMessage(Component.literal(Textos.colorear(texto) + "§r"), false);
+        String extra = instruccion(pideCumplido, segundos);
+        if (!extra.isEmpty()) {
+            server.getPlayerList().broadcastSystemMessage(Component.literal(extra), false);
+        }
+    }
+
+    private static void sonido(MinecraftServer server) {
+        for (ServerPlayer p : server.getPlayerList().getPlayers()) {
+            p.playNotifySound(SoundEvents.UI_TOAST_CHALLENGE_COMPLETE, SoundSource.MASTER, 1.0f, 1.0f);
+        }
     }
 
     private static void activar(MinecraftServer server) {
         final boolean exige = retoActual.cumplido();
         final boolean conTiempo = segundosLimite > 0;
-        final String texto = retoActual.texto();
 
         participantes.clear();
         cumplidos.clear();
@@ -400,36 +538,20 @@ public class RuletaServer {
                 participantes.add(p.getUUID());
             }
             if (participantes.isEmpty()) {
-                reiniciar();
+                reiniciar(true);
                 return;
             }
         }
 
-        String instruccion;
-        if (exige && conTiempo) {
-            instruccion = "Tienen §e" + segundosLimite + " s§f. Al cumplirlo escribe §b/cumplido§f. ¡Quien no lo haga, muere!";
-        } else if (exige) {
-            instruccion = "Sin límite de tiempo. Al cumplirlo escribe §b/cumplido§f.";
-        } else if (conTiempo) {
-            instruccion = "Tienen §e" + segundosLimite + " s§f.";
-        } else {
-            instruccion = "";
+        if (avisoActivo) {
+            mostrarAviso(server, retoActual.tituloVisible(), retoActual.texto(), colorAviso,
+                    conTiempo ? segundosLimite : 0, exige);
         }
-        server.getPlayerList().broadcastSystemMessage(Component.literal(
-                "§6[Ruleta] §f" + (exige ? "Reto para todos: " : "Aviso: ") + "§a" + texto + "§f. " + instruccion), false);
-
-        for (ServerPlayer p : server.getPlayerList().getPlayers()) {
-            p.connection.send(new ClientboundSetTitlesAnimationPacket(10, 80, 20));
-            p.connection.send(new ClientboundSetSubtitleTextPacket(
-                    Component.literal(texto).withStyle(ChatFormatting.WHITE)));
-            p.connection.send(new ClientboundSetTitleTextPacket(
-                    Component.literal(exige ? "¡RETO PARA TODOS!" : "¡AVISO!").withStyle(ChatFormatting.GOLD)));
-            p.playNotifySound(SoundEvents.UI_TOAST_CHALLENGE_COMPLETE, SoundSource.MASTER, 1.0f, 1.0f);
-        }
+        sonido(server);
 
         if (!exige && !conTiempo) {
-            // Aviso simple: no hay nada que esperar.
-            reiniciar();
+            // Aviso simple: no hay nada que esperar (el cuadro de aviso se queda hasta que lo ocultes).
+            reiniciar(false);
             return;
         }
         fase = Fase.ACTIVO;
@@ -448,7 +570,7 @@ public class RuletaServer {
             nombres.add(p.getName().getString());
         }
         if (condenados.isEmpty()) {
-            reiniciar();
+            reiniciar(true);
             return;
         }
         fase = Fase.EJECUCION;
@@ -470,10 +592,11 @@ public class RuletaServer {
         } finally {
             ejecutando = false;
         }
-        reiniciar();
+        reiniciar(true);
     }
 
-    private static void reiniciar() {
+    /** limpiarAviso = true quita tambien el cuadro de aviso de la pantalla de los jugadores. */
+    private static void reiniciar(boolean limpiarAviso) {
         fase = Fase.NINGUNA;
         ticks = 0;
         cuenta = 0;
@@ -482,5 +605,11 @@ public class RuletaServer {
         participantes.clear();
         cumplidos.clear();
         condenados.clear();
+        if (limpiarAviso && avisoMostrado) {
+            avisoMostrado = false;
+            if (ServerLifecycleHooks.getCurrentServer() != null) {
+                Net.CHANNEL.send(AvisoPacket.quitar(), PacketDistributor.ALL.noArg());
+            }
+        }
     }
 }

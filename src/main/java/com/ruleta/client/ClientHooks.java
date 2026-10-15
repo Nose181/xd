@@ -1,5 +1,6 @@
 package com.ruleta.client;
 
+import com.ruleta.Reto;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.resources.sounds.SimpleSoundInstance;
 import net.minecraft.sounds.SoundEvents;
@@ -21,6 +22,25 @@ public class ClientHooks {
         if (mc.player == null) return;
         if (MuerteOverlay.iniciar(nombres, castigo)) {
             mc.getSoundManager().play(SimpleSoundInstance.forUI(SoundEvents.WITHER_DEATH, 0.9f, 0.6f));
+        }
+    }
+
+    public static void recibirAviso(String titulo, String mensaje, int rgb, int segundos,
+                                    boolean pideCumplido, boolean limpiar) {
+        if (limpiar) {
+            AvisoOverlay.limpiar();
+        } else {
+            AvisoOverlay.mostrar(titulo, mensaje, rgb, segundos, pideCumplido);
+        }
+    }
+
+    public static void abrirPanel(List<Reto> retos, int seleccionado) {
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.player == null || retos.isEmpty()) return;
+        if (mc.screen instanceof PanelScreen panel) {
+            panel.actualizar(retos, seleccionado);
+        } else {
+            mc.setScreen(new PanelScreen(retos, seleccionado));
         }
     }
 }

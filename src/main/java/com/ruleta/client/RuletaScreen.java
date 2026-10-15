@@ -7,6 +7,7 @@ import com.mojang.blaze3d.vertex.DefaultVertexFormat;
 import com.mojang.blaze3d.vertex.Tesselator;
 import com.mojang.blaze3d.vertex.VertexFormat;
 import com.mojang.math.Axis;
+import com.ruleta.Textos;
 import net.minecraft.Util;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
@@ -284,7 +285,8 @@ public class RuletaScreen extends Screen {
         int a = (int) (k * 255f);
         if (a < 8) return;
         int pw = Math.min(this.width - 40, 320);
-        List<FormattedCharSequence> lineas = this.font.split(Component.literal(textoGanador), pw - 20);
+        List<FormattedCharSequence> lineas = this.font.split(Component.literal(Textos.colorear(textoGanador)), pw - 20);
+        if (lineas.size() > 5) lineas = lineas.subList(0, 5);
         int ph = 28 + lineas.size() * 10;
         int x0 = cx - pw / 2;
         int y0 = cy + r + 20 + (int) ((1f - k) * 14f);

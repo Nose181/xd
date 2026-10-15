@@ -2,6 +2,7 @@ package com.ruleta.client;
 
 import com.ruleta.Colores;
 import com.ruleta.Reto;
+import com.ruleta.Textos;
 import net.minecraftforge.fml.loading.FMLPaths;
 
 import java.io.IOException;
@@ -12,7 +13,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 
-/** Lee y guarda los retos en config/ruleta-retos.txt (formato:  color|tiempo|modo|reto). */
+/** Lee y guarda los retos en config/ruleta-retos.txt (formato:  color|tiempo|modo|titulo|texto). */
 public class RetosConfig {
 
     public static final int MINIMO = 2;
@@ -57,6 +58,10 @@ public class RetosConfig {
         return null;
     }
 
+    private static boolean colorValido(String c) {
+        return c.equals("auto") || Colores.parse(c) >= 0;
+    }
+
     public static List<Reto> cargar() {
         Path p = archivo();
         try {
@@ -66,14 +71,27 @@ public class RetosConfig {
                 String s = linea.replace("\uFEFF", "").trim();
                 if (s.isEmpty() || s.startsWith("#")) continue;
 
-                // Formato nuevo: color|tiempo|modo|texto
-                String[] partes = s.split("\\|", 4);
-                if (partes.length == 4) {
-                    String c = partes[0].trim().toLowerCase(Locale.ROOT);
-                    int t = parseTiempo(partes[1]);
-                    Boolean modo = parseModo(partes[2]);
-                    String texto = partes[3].trim();
-                    if ((c.equals("auto") || Colores.parse(c) >= 0) && t >= 0 && modo != null && !texto.isEmpty()) {
+                // Formato actual: color|tiempo|modo|titulo|texto
+                String[] a = s.split("\\|", 5);
+                if (a.length == 5) {
+                    String c = a[0].trim().toLowerCase(Locale.ROOT);
+                    int t = parseTiempo(a[1]);
+                    Boolean modo = parseModo(a[2]);
+                    String texto = Textos.desdeArchivo(a[4].trim());
+                    if (colorValido(c) && t >= 0 && modo != null && !texto.isEmpty()) {
+                        retos.add(new Reto(c.equals("auto") ? "" : c, t, modo, Textos.limpiarTitulo(a[3]), texto));
+                        continue;
+                    }
+                }
+
+                // Formato anterior: color|tiempo|modo|texto (sin titulo)
+                String[] b = s.split("\\|", 4);
+                if (b.length == 4) {
+                    String c = b[0].trim().toLowerCase(Locale.ROOT);
+                    int t = parseTiempo(b[1]);
+                    Boolean modo = parseModo(b[2]);
+                    String texto = Textos.desdeArchivo(b[3].trim());
+                    if (colorValido(c) && t >= 0 && modo != null && !texto.isEmpty()) {
                         retos.add(new Reto(c.equals("auto") ? "" : c, t, modo, texto));
                         continue;
                     }
@@ -87,6 +105,7 @@ public class RetosConfig {
                     color = s.substring(0, barra).trim().toLowerCase(Locale.ROOT);
                     texto = s.substring(barra + 1).trim();
                 }
+                texto = Textos.desdeArchivo(texto);
                 if (!texto.isEmpty()) retos.add(new Reto(color, 60, true, texto));
             }
             if (retos.size() >= MINIMO) {
@@ -100,18 +119,23 @@ public class RetosConfig {
 
     public static void guardar(List<Reto> retos) throws IOException {
         List<String> lineas = new ArrayList<>();
-        lineas.add("# Un reto por línea con el formato:  color|tiempo|modo|texto");
+        lineas.add("# Un reto por línea con el formato:  color|tiempo|modo|titulo|texto");
         lineas.add("#   color:  " + String.join(", ", Colores.nombres()) + ", auto, o un código hex de 6 dígitos (ej: ff8800)");
+        lineas.add("#           (es también el color del cuadro de aviso)");
         lineas.add("#   tiempo: 'sin' (sin límite) o segundos, de " + SEG_MIN + " a " + SEG_MAX);
         lineas.add("#   modo:   'cumplido' (hay que escribir /cumplido; quien no lo haga a tiempo muere)");
         lineas.add("#           'aviso' (solo se anuncia el texto, nadie muere)");
-        lineas.add("# Las líneas antiguas 'color|texto' siguen funcionando (60 s y con /cumplido).");
-        lineas.add("# Mínimo " + MINIMO + " retos, máximo " + MAXIMO + ". Lo más cómodo: /ruleta agregar y /ruleta quitar.");
+        lineas.add("#   titulo: título del aviso (puede quedar vacío)");
+        lineas.add("#   texto:  el mensaje. Usa &c, &a, &l, &r... para colores/formato y \\n para saltar de línea.");
+        lineas.add("# Las líneas de formatos anteriores siguen funcionando.");
+        lineas.add("# Mínimo " + MINIMO + " retos, máximo " + MAXIMO + ". Lo más cómodo: /ruleta panel");
         for (Reto r : retos) {
             String color = (r.color() == null || r.color().isEmpty()) ? "auto" : r.color();
             String tiempo = r.segundos() > 0 ? String.valueOf(r.segundos()) : "sin";
             String modo = r.cumplido() ? "cumplido" : "aviso";
-            lineas.add(color + "|" + tiempo + "|" + modo + "|" + r.texto());
+            String titulo = r.titulo() == null ? "" : Textos.limpiarTitulo(r.titulo());
+            String texto = Textos.aArchivo(r.texto().replace('|', ' '));
+            lineas.add(color + "|" + tiempo + "|" + modo + "|" + titulo + "|" + texto);
         }
         Files.write(archivo(), lineas, StandardCharsets.UTF_8);
     }

@@ -1,4 +1,6 @@
 {
+  "key.ruleta.ocultar": "Hide notice",
+  "key.categories.ruleta": "Challenge Roulette",
   "gui.ruleta.cerrar": "Close",
   "gui.ruleta.resultado": "You got:"
 }

@@ -7,7 +7,6 @@ import com.mojang.blaze3d.vertex.DefaultVertexFormat;
 import com.mojang.blaze3d.vertex.Tesselator;
 import com.mojang.blaze3d.vertex.VertexFormat;
 import com.mojang.math.Axis;
-import com.ruleta.Textos;
 import net.minecraft.Util;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
@@ -17,7 +16,6 @@ import net.minecraft.client.renderer.GameRenderer;
 import net.minecraft.client.resources.sounds.SimpleSoundInstance;
 import net.minecraft.network.chat.Component;
 import net.minecraft.sounds.SoundEvents;
-import net.minecraft.util.FormattedCharSequence;
 import net.minecraft.util.Mth;
 import org.joml.Matrix4f;
 
@@ -27,14 +25,17 @@ import java.util.List;
 import java.util.Random;
 
 /**
- * Ruleta misteriosa: los sectores solo muestran colores y "?". Gira 6,5 segundos y se detiene
- * exactamente en el sector que eligio el servidor; recien ahi se revela el reto.
+ * Ruleta misteriosa: los sectores solo muestran colores y "?". Entra girando con un destello, gira 6,5 segundos
+ * y se detiene exactamente en el sector que eligio el servidor; ahi el sector salta hacia afuera con rayos de luz,
+ * ondas y confeti del color elegido, y despues la rueda se va encogiendo y girando. El reto lo muestra el aviso.
  */
 public class RuletaScreen extends Screen {
 
     private static final float DOS_PI = (float) (Math.PI * 2.0);
     private static final long DURACION_MS = 6500L;
-    private static final long CIERRE_MS = 2000L;
+    private static final long CIERRE_MS = 1800L;   // cuanto se queda la rueda despues de elegir el color
+    private static final long SALIDA_MS = 450L;    // animacion de salida
+    private static final float ENTRADA_S = 0.7f;   // animacion de entrada
     private static final int BOMBILLAS = 28;
 
     private static class Particula {
@@ -57,6 +58,8 @@ public class RuletaScreen extends Screen {
     private long ultimoFrame = Util.getMillis();
     private boolean terminado = false;
     private long finMs = 0L;
+    private boolean saliendo = false;
+    private long inicioSalida = 0L;
 
     public RuletaScreen(int[] colores, int ganador, String textoGanador) {
         super(Component.literal("Ruleta"));
@@ -92,9 +95,25 @@ public class RuletaScreen extends Screen {
         return Math.min(n - 1, (int) (rel / seg));
     }
 
+    /** Cerrar (boton, Esc o automatico) primero hace la animacion de salida; una segunda vez cierra de inmediato. */
+    @Override
+    public void onClose() {
+        if (saliendo) {
+            super.onClose();
+            return;
+        }
+        saliendo = true;
+        inicioSalida = Util.getMillis();
+    }
+
     @Override
     public void tick() {
-        if (terminado && Util.getMillis() - finMs > CIERRE_MS) {
+        long ahora = Util.getMillis();
+        if (saliendo) {
+            if (ahora - inicioSalida >= SALIDA_MS) super.onClose();
+            return;
+        }
+        if (terminado && ahora - finMs > CIERRE_MS) {
             this.onClose();
         }
     }
@@ -104,11 +123,16 @@ public class RuletaScreen extends Screen {
     }
 
     private int centroY() {
-        return this.height / 2 - 14;
+        return this.height / 2;
     }
 
     private int radio() {
-        return Math.max(40, Math.min(this.height / 2 - 70, 120));
+        return Math.max(40, Math.min(this.height / 2 - 40, 130));
+    }
+
+    /** El fondo oscuro de Minecraft se anula: se ve el juego tal cual detras de la rueda. */
+    @Override
+    public void renderBackground(GuiGraphics g, int mouseX, int mouseY, float partialTick) {
     }
 
     // ------------------------------------------------------------------ render
@@ -118,10 +142,14 @@ public class RuletaScreen extends Screen {
         float dt = Math.min((ahora - ultimoFrame) / 1000f, 0.1f);
         ultimoFrame = ahora;
         float t = (ahora - inicio) / 1000f;
+        float ts = saliendo ? Mth.clamp((ahora - inicioSalida) / (float) SALIDA_MS, 0f, 1f) : 0f;
 
+        // La rueda entra girando hacia atras y se acomoda; al salir da media vuelta mas
         float x = Mth.clamp((ahora - inicio) / (float) DURACION_MS, 0f, 1f);
         float suave = 1f - (float) Math.pow(1f - x, 4);
-        angulo = anguloInicial + recorrido * suave;
+        float entradaK = Mth.clamp(t / ENTRADA_S, 0f, 1f);
+        float giroEntrada = (1f - easeOutCubic(entradaK)) * (float) (-Math.PI * 1.2);
+        angulo = anguloInicial + recorrido * suave + giroEntrada + ts * ts * (float) Math.PI * 1.1f;
 
         flick = Math.max(0f, flick - dt * 5f);
         if (!terminado) {
@@ -137,21 +165,29 @@ public class RuletaScreen extends Screen {
             if (x >= 1f) {
                 terminado = true;
                 finMs = ahora;
+                flick = 1.6f;
                 lanzarConfeti();
             }
         }
+        float tr = terminado ? (ahora - finMs) / 1000f : -1f;
         actualizarConfeti(dt);
 
         int cx = centroX();
         int cy = centroY();
         int r = radio();
+        int rgbGan = colores[ganador] & 0xFFFFFF;
 
-        // Fondo que se oscurece suavemente
-        float fondo = Mth.clamp(t / 0.4f, 0f, 1f);
-        g.fill(0, 0, this.width, this.height, ((int) (fondo * 190) << 24) | 0x0A0A18);
+        // Destello del color elegido (sin fondo oscuro)
+        if (terminado && tr < 0.4f) {
+            g.fill(0, 0, this.width, this.height, argb((1f - tr / 0.4f) * 0.28f, rgbGan));
+        }
 
-        // La rueda aparece creciendo con un pequeño rebote
-        float escala = Math.max(0.01f, easeOutBack(Mth.clamp(t / 0.5f, 0f, 1f)));
+        // Entra con rebote, "late" al elegir el color y se encoge al salir
+        float escala = easeOutBack(Mth.clamp(t / 0.6f, 0f, 1f));
+        if (terminado && tr < 0.4f) escala *= 1f + 0.07f * (float) Math.sin(tr / 0.4f * Math.PI);
+        if (saliendo) escala *= 1f - easeInBack(ts);
+        escala = Math.max(0.01f, escala);
+
         g.pose().pushPose();
         g.pose().translate(cx, cy, 0);
         g.pose().scale(escala, escala, 1f);
@@ -161,39 +197,43 @@ public class RuletaScreen extends Screen {
         RenderSystem.enableBlend();
         RenderSystem.defaultBlendFunc();
         RenderSystem.disableCull();
-        dibujarRueda(m, cx, cy, r, t);
+        dibujarRueda(m, cx, cy, r, t, tr, ts);
         RenderSystem.enableCull();
         RenderSystem.disableBlend();
 
-        dibujarSignos(g, cx, cy, r);
-
-        String titulo = "RULETA DE RETOS";
-        int colTitulo = 0xFF000000 | Mth.hsvToRgb((t * 0.15f) % 1f, 0.45f, 1f);
-        g.pose().pushPose();
-        g.pose().translate(cx, cy - r - 40, 0);
-        g.pose().scale(2f, 2f, 1f);
-        g.drawString(this.font, titulo, -this.font.width(titulo) / 2, 0, colTitulo, true);
+        dibujarSignos(g, cx, cy, r, tr);
         g.pose().popPose();
-
-        g.pose().popPose();
-
-        if (terminado) dibujarResultado(g, cx, cy, r, ahora);
 
         // Confeti
         for (Particula p : confeti) {
-            int alpha = (int) (Mth.clamp(p.vida / 0.8f, 0f, 1f) * 255f);
+            int alpha = (int) (Mth.clamp(p.vida / 0.8f, 0f, 1f) * 255f * (1f - ts));
+            if (alpha < 4) continue;
             g.fill((int) p.x, (int) p.y, (int) p.x + 4, (int) p.y + 3, (alpha << 24) | p.color);
         }
 
         super.render(g, mouseX, mouseY, partialTick);
     }
 
-    private void dibujarRueda(Matrix4f m, int cx, int cy, int r, float t) {
+    private void dibujarRueda(Matrix4f m, int cx, int cy, int r, float t, float tr, float ts) {
         int n = colores.length;
         float seg = DOS_PI / n;
-        long ahora = Util.getMillis();
-        float dim = terminado ? 1f - 0.45f * Mth.clamp((ahora - finMs) / 400f, 0f, 1f) : 1f;
-        float pulso = terminado ? 1f + 0.25f * (float) Math.sin((ahora - finMs) / 1000f * 9f) : 1f;
+        boolean rev = terminado && tr >= 0f;
+        int rgbGan = colores[ganador] & 0xFFFFFF;
+
+        // Rayos de luz hacia el sector elegido (detras de la rueda)
+        if (rev) {
+            float fuerza = Mth.clamp(tr / 0.12f, 0f, 1f) * Mth.clamp(1f - tr / 1.7f, 0f, 1f);
+            if (fuerza > 0.01f) {
+                float medio = angulo + (ganador + 0.5f) * seg;
+                float largo = r * 2.6f;
+                sector(m, cx, cy, 0, largo, medio - seg * 0.9f, medio + seg * 0.9f,
+                        ((int) (fuerza * 150) << 24) | rgbGan, rgbGan, 14);
+                sector(m, cx, cy, 0, largo, medio - seg * 0.35f, medio + seg * 0.35f,
+                        ((int) (fuerza * 120) << 24) | 0xFFFFFF, 0xFFFFFF, 14);
+            }
+        }
+
+        float dim = rev ? 1f - 0.45f * Mth.clamp(tr / 0.4f, 0f, 1f) : 1f;
 
         // Sombra y aro dorado
         sector(m, cx + 3, cy + 4, 0, r + 13, 0, DOS_PI, 0x66000000, 0x66000000, 64);
@@ -201,13 +241,22 @@ public class RuletaScreen extends Screen {
         sector(m, cx, cy, r + 10, r + 12, 0, DOS_PI, 0xFF3A2A05, 0xFF3A2A05, 64);
 
         // Sectores con degradado desde el centro
+        int pasos = Math.max(2, (int) Math.ceil(seg / 0.1f));
         for (int i = 0; i < n; i++) {
-            boolean gana = terminado && i == ganador;
-            float f = gana ? pulso : dim;
+            if (rev && i == ganador) continue;
             int base = colores[i];
             float a0 = angulo + i * seg;
-            int pasos = Math.max(2, (int) Math.ceil(seg / 0.1f));
-            sector(m, cx, cy, 0, r, a0, a0 + seg, mul(base, 0.5f * f), mul(base, 1.0f * f), pasos);
+            sector(m, cx, cy, 0, r, a0, a0 + seg, mul(base, 0.5f * dim), mul(base, 1.0f * dim), pasos);
+        }
+
+        // El sector elegido salta hacia afuera y brilla
+        if (rev) {
+            float pop = 10f * easeOutBack(Mth.clamp(tr / 0.3f, 0f, 1f));
+            float pulso = 1f + 0.22f * (float) Math.sin(tr * 9f);
+            float a0 = angulo + ganador * seg;
+            int base = colores[ganador];
+            sector(m, cx, cy, 0, r + pop, a0, a0 + seg, mul(base, 0.5f * pulso), mul(base, 1.0f * pulso), pasos);
+            sector(m, cx, cy, r + pop - 2, r + pop + 1, a0, a0 + seg, 0xFFFFFFFF, 0xFFFFFFFF, pasos);
         }
 
         // Lineas separadoras
@@ -226,15 +275,25 @@ public class RuletaScreen extends Screen {
         }
         dibujar(b);
 
-        // Bombillas del aro: corren mientras gira y parpadean al terminar
-        for (int k = 0; k < BOMBILLAS; k++) {
-            float a = k * DOS_PI / BOMBILLAS;
+        // Bombillas del aro: se encienden una a una al entrar, corren mientras gira y parpadean con el color elegido
+        int visibles = (int) (BOMBILLAS * Mth.clamp(t / 0.8f, 0f, 1f));
+        int luz = rev ? mul(colores[ganador], 1.25f) : 0xFFFFF6C8;
+        int brillo = 0x55000000 | (luz & 0xFFFFFF);
+        for (int k = 0; k < visibles; k++) {
+            float a = (float) (-Math.PI / 2.0) + k * DOS_PI / BOMBILLAS;
             float bx = cx + Mth.cos(a) * (r + 5);
             float by = cy + Mth.sin(a) * (r + 5);
-            boolean enc = terminado ? (((int) (t * 5f)) + k) % 2 == 0 : (k + (int) (t * 16f)) % 3 == 0;
+            boolean enc;
+            if (saliendo) {
+                enc = false;
+            } else if (rev) {
+                enc = (((int) (tr * 6f)) + k) % 2 == 0;
+            } else {
+                enc = (k + (int) (t * 16f)) % 3 == 0;
+            }
             if (enc) {
-                sector(m, bx, by, 0, 5.5f, 0, DOS_PI, 0x55FFE08A, 0x55FFE08A, 14);
-                sector(m, bx, by, 0, 2.6f, 0, DOS_PI, 0xFFFFF6C8, 0xFFFFF6C8, 10);
+                sector(m, bx, by, 0, 5.5f, 0, DOS_PI, brillo, brillo, 14);
+                sector(m, bx, by, 0, 2.6f, 0, DOS_PI, luz, luz, 10);
             } else {
                 sector(m, bx, by, 0, 2.4f, 0, DOS_PI, 0xFF6B4E10, 0xFF6B4E10, 10);
             }
@@ -246,9 +305,10 @@ public class RuletaScreen extends Screen {
         sector(m, cx, cy, 0, 9, 0, DOS_PI, 0xFF3A2A05, 0xFF3A2A05, 24);
         sector(m, cx, cy, 0, 4, 0, DOS_PI, 0xFFFFF0B0, 0xFFFFF0B0, 16);
 
-        // Flecha dorada que se mueve cada vez que pasa un sector
+        // Flecha dorada: cae al entrar, se mueve con cada sector y sube al salir
+        float caida = 1f - easeOutBack(Mth.clamp((t - 0.2f) / 0.5f, 0f, 1f));
         float px = cx;
-        float py = cy - r - 12;
+        float py = cy - r - 12 - caida * 40f - ts * 40f;
         float ang = flick * 0.45f;
         float cs = Mth.cos(ang);
         float sn = Mth.sin(ang);
@@ -256,23 +316,46 @@ public class RuletaScreen extends Screen {
         triangulo(m, px, py, pts, 1.3f, cs, sn, 0xFF3A2A05);
         triangulo(m, px, py, pts, 1.0f, cs, sn, 0xFFFFD54A);
         sector(m, px, py, 0, 3f, 0, DOS_PI, 0xFFFFFFFF, 0xFFFFFFFF, 12);
+
+        // Onda dorada al entrar
+        if (t < 0.7f) {
+            float k = t / 0.7f;
+            float rad = r * (0.4f + 1.3f * easeOutCubic(k));
+            int alfa = (int) ((1f - k) * 150);
+            anillo(m, cx, cy, rad, 3f + 6f * (1f - k), (alfa << 24) | 0xFFE08A);
+        }
+        // Ondas del color elegido
+        if (rev) {
+            for (int j = 0; j < 2; j++) {
+                float kk = Mth.clamp((tr - j * 0.18f) / 0.9f, 0f, 1f);
+                if (kk > 0f && kk < 1f) {
+                    float rad = r * (0.2f + 1.9f * easeOutCubic(kk));
+                    int alfa = (int) ((1f - kk) * 180);
+                    anillo(m, cx, cy, rad, 6f, (alfa << 24) | rgbGan);
+                }
+            }
+        }
     }
 
-    private void dibujarSignos(GuiGraphics g, int cx, int cy, int r) {
+    private void dibujarSignos(GuiGraphics g, int cx, int cy, int r, float tr) {
         int n = colores.length;
         float seg = DOS_PI / n;
-        float tam = Mth.clamp(r / 45f, 0.9f, 2.2f) * (n > 14 ? 0.7f : 1f);
+        boolean rev = terminado && tr >= 0f;
+        float pop = rev ? 10f * easeOutBack(Mth.clamp(tr / 0.3f, 0f, 1f)) : 0f;
+        float base = Mth.clamp(r / 45f, 0.9f, 2.2f) * (n > 14 ? 0.7f : 1f);
         for (int i = 0; i < n; i++) {
             float medio = angulo + (i + 0.5f) * seg;
-            boolean gana = terminado && i == ganador;
+            boolean gana = rev && i == ganador;
             String s = gana ? "!" : "?";
             int rgb = colores[i];
             float lum = (0.299f * ((rgb >> 16) & 255) + 0.587f * ((rgb >> 8) & 255) + 0.114f * (rgb & 255)) / 255f;
             boolean claro = lum > 0.65f;
+            float tam = gana ? base * (1.4f + 0.25f * (float) Math.sin(tr * 8f)) : base;
+            float dist = r * 0.66f + (gana ? pop * 0.4f : 0f);
             g.pose().pushPose();
             g.pose().translate(cx, cy, 0);
             g.pose().mulPose(Axis.ZP.rotation(medio + (float) (Math.PI / 2.0)));
-            g.pose().translate(0, -r * 0.66f, 0);
+            g.pose().translate(0, -dist, 0);
             g.pose().scale(tam, tam, 1f);
             g.drawString(this.font, s, -this.font.width(s) / 2, -this.font.lineHeight / 2,
                     claro ? 0xFF202020 : 0xFFFFFFFF, !claro);
@@ -280,47 +363,25 @@ public class RuletaScreen extends Screen {
         }
     }
 
-    private void dibujarResultado(GuiGraphics g, int cx, int cy, int r, long ahora) {
-        float k = Mth.clamp((ahora - finMs) / 350f, 0f, 1f);
-        int a = (int) (k * 255f);
-        if (a < 8) return;
-        int pw = Math.min(this.width - 40, 320);
-        List<FormattedCharSequence> lineas = this.font.split(Component.literal(Textos.colorear(textoGanador)), pw - 20);
-        if (lineas.size() > 5) lineas = lineas.subList(0, 5);
-        int ph = 28 + lineas.size() * 10;
-        int x0 = cx - pw / 2;
-        int y0 = cy + r + 20 + (int) ((1f - k) * 14f);
-        int borde = (a << 24) | (colores[ganador] & 0xFFFFFF);
-
-        g.fill(x0, y0, x0 + pw, y0 + ph, ((a * 3 / 4) << 24) | 0x101018);
-        g.fill(x0, y0, x0 + pw, y0 + 2, borde);
-        g.fill(x0, y0 + ph - 2, x0 + pw, y0 + ph, borde);
-        g.fill(x0, y0, x0 + 2, y0 + ph, borde);
-        g.fill(x0 + pw - 2, y0, x0 + pw, y0 + ph, borde);
-
-        g.drawCenteredString(this.font, Component.translatable("gui.ruleta.resultado"), cx, y0 + 7,
-                (a << 24) | 0xFFD966);
-        int y = y0 + 19;
-        for (FormattedCharSequence linea : lineas) {
-            g.drawCenteredString(this.font, linea, cx, y, (a << 24) | 0xFFFFFF);
-            y += 10;
-        }
-    }
-
     // ------------------------------------------------------------------ confeti
     private void lanzarConfeti() {
         int cx = centroX();
         int cy = centroY();
-        for (int i = 0; i < 80; i++) {
+        int ganadorRgb = colores[ganador] & 0xFFFFFF;
+        for (int i = 0; i < 90; i++) {
             Particula p = new Particula();
             p.x = cx;
             p.y = cy;
             float a = azar.nextFloat() * DOS_PI;
-            float v = 120f + azar.nextFloat() * 220f;
+            float v = 120f + azar.nextFloat() * 240f;
             p.vx = Mth.cos(a) * v;
             p.vy = Mth.sin(a) * v - 160f;
             p.vida = 1.8f + azar.nextFloat() * 1.2f;
-            p.color = colores[azar.nextInt(colores.length)] & 0xFFFFFF;
+            if (azar.nextInt(10) < 6) {
+                p.color = mul(ganadorRgb, 0.8f + azar.nextFloat() * 0.5f) & 0xFFFFFF;
+            } else {
+                p.color = colores[azar.nextInt(colores.length)] & 0xFFFFFF;
+            }
             confeti.add(p);
         }
     }
@@ -361,6 +422,11 @@ public class RuletaScreen extends Screen {
         dibujar(b);
     }
 
+    private static void anillo(Matrix4f m, float cx, float cy, float rad, float ancho, int argb) {
+        int pasos = Math.min(120, Math.max(32, (int) (rad / 2f)));
+        sector(m, cx, cy, rad, rad + ancho, 0, DOS_PI, argb, argb, pasos);
+    }
+
     private static void triangulo(Matrix4f m, float px, float py, float[][] pts, float esc,
                                   float cs, float sn, int argb) {
         BufferBuilder b = comenzar(VertexFormat.Mode.TRIANGLES);
@@ -383,6 +449,11 @@ public class RuletaScreen extends Screen {
         return 0xFF000000 | (r << 16) | (g << 8) | b;
     }
 
+    private static int argb(float a, int rgb) {
+        int al = (int) (Mth.clamp(a, 0f, 1f) * 255f);
+        return (al << 24) | (rgb & 0xFFFFFF);
+    }
+
     private static float easeOutBack(float x) {
         float c1 = 1.70158f;
         float c3 = c1 + 1f;
@@ -390,9 +461,15 @@ public class RuletaScreen extends Screen {
         return 1f + c3 * y * y * y + c1 * y * y;
     }
 
-    @Override
-    public void renderBackground(GuiGraphics g, int mouseX, int mouseY, float partialTick) {
-        // El fondo oscuro lo dibuja render() con su propia animacion.
+    private static float easeInBack(float x) {
+        float c1 = 1.70158f;
+        float c3 = c1 + 1f;
+        return c3 * x * x * x - c1 * x * x;
+    }
+
+    private static float easeOutCubic(float x) {
+        float y = 1f - x;
+        return 1f - y * y * y;
     }
 
     @Override

@@ -35,6 +35,7 @@ public class ClientSetup {
         Window ventana = event.getWindow();
         int w = ventana.getGuiScaledWidth();
         int h = ventana.getGuiScaledHeight();
+        RuletaOverlay.render(event.getGuiGraphics(), w, h);
         AvisoOverlay.render(event.getGuiGraphics(), w, h);
         MuerteOverlay.render(event.getGuiGraphics(), w, h);
     }
@@ -54,6 +55,7 @@ public class ClientSetup {
         if (event.phase != TickEvent.Phase.END) return;
         while (OCULTAR.consumeClick()) {
             AvisoOverlay.ocultar();
+            RuletaOverlay.saltar();
         }
     }
 }

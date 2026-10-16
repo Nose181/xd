@@ -14,7 +14,7 @@ public class ClientHooks {
         Minecraft mc = Minecraft.getInstance();
         if (mc.player == null || colores.length < 2) return;
         int i = Math.max(0, Math.min(indice, colores.length - 1));
-        mc.setScreen(new RuletaScreen(colores, i, texto));
+        RuletaOverlay.iniciar(colores, i, texto);
     }
 
     public static void mostrarMuerte(List<String> nombres, boolean castigo) {

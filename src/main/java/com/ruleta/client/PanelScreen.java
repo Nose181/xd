@@ -222,6 +222,7 @@ public class PanelScreen extends Screen {
     private void enviar(int accion) {
         Net.CHANNEL.send(new PanelAccionPacket(accion, sel, titulo.getValue(), mensaje.getValue(),
                 segundos, cumplido, aviso), PacketDistributor.SERVER.noArg());
+        if (accion == PanelAccionPacket.LANZAR) onClose();
     }
 
     // ------------------------------------------------------------------ dibujo
